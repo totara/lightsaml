@@ -7,6 +7,7 @@ use DOMElement;
 use DOMXPath;
 use LightSaml\Credential\KeyHelper;
 use LightSaml\Credential\X509Certificate;
+use LightSaml\Credential\X509Credential;
 use LightSaml\Error\LightSamlSecurityException;
 use LightSaml\Helper;
 use LightSaml\Model\Assertion\Assertion;
@@ -182,6 +183,58 @@ class XmlSignatureWrappingTest extends BaseTestCase
         $reader->validate(KeyHelper::createPublicKey($this->getCertificate()));
     }
 
+    public function test_validate_multi_accepts_signature_from_second_key(): void
+    {
+        // An IdP mid certificate rollover lists two signing certificates. The first one tried does not
+        // match, so validate() runs again for the second after validateReference() has already
+        // detached the signature node from the document.
+        $assertionId = Helper::generateID();
+        $response = $this->buildSignedResponse($assertionId, 'alice@example.com');
+
+        $serCtx = new SerializationContext();
+        $response->serialize($serCtx->getDocument(), $serCtx);
+
+        $desCtx = new DeserializationContext();
+        $desCtx->getDocument()->loadXML($serCtx->getDocument()->saveXML());
+        $deserialized = new Response();
+        $deserialized->deserialize($desCtx->getDocument(), $desCtx);
+
+        $matching = new X509Credential($this->getCertificate());
+
+        /** @var SignatureXmlReader $sig */
+        $sig = $deserialized->getAllAssertions()[0]->getSignature();
+        $this->assertSame($matching, $sig->validateMulti([
+            new X509Credential($this->getOtherCertificate()),
+            $matching,
+        ]));
+    }
+
+    public function test_validate_multi_rejects_xsw_for_every_key(): void
+    {
+        $assertionId = Helper::generateID();
+        $response = $this->buildSignedResponse($assertionId, 'alice@example.com');
+
+        $serCtx = new SerializationContext();
+        $response->serialize($serCtx->getDocument(), $serCtx);
+        $tamperedXml = $this->buildXswPayload($serCtx->getDocument()->saveXML(), $assertionId);
+
+        $desCtx = new DeserializationContext();
+        $desCtx->getDocument()->loadXML($tamperedXml);
+        $tamperedResponse = new Response();
+        $tamperedResponse->deserialize($desCtx->getDocument(), $desCtx);
+
+        // The matching key is tried last, so the wrapping check has to fail on that call too.
+        $this->expectException(LightSamlSecurityException::class);
+        $this->expectExceptionMessageMatches('/Duplicate ID .* XML Signature Wrapping/');
+
+        /** @var SignatureXmlReader $sig */
+        $sig = $tamperedResponse->getAllAssertions()[0]->getSignature();
+        $sig->validateMulti([
+            new X509Credential($this->getOtherCertificate()),
+            new X509Credential($this->getCertificate()),
+        ]);
+    }
+
     private function buildSignedResponse(string $assertionId, string $nameIdValue): Response
     {
         return (new Response())
@@ -263,6 +316,11 @@ class XmlSignatureWrappingTest extends BaseTestCase
     private function getCertificate(): X509Certificate
     {
         return X509Certificate::fromFile(__DIR__ . '/../../../resources/web_saml.crt');
+    }
+
+    private function getOtherCertificate(): X509Certificate
+    {
+        return X509Certificate::fromFile(__DIR__ . '/../../../resources/saml.crt');
     }
 
     private function getPrivateKey(): XMLSecurityKey

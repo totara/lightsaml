@@ -20,6 +20,9 @@ class SignatureXmlReader extends AbstractSignatureReader
     /** @var string[] */
     protected $certificates = [];
 
+    /** @var bool */
+    private $wrappingCheckPassed = false;
+
     /**
      * @param string $certificate
      */
@@ -39,6 +42,7 @@ class SignatureXmlReader extends AbstractSignatureReader
     public function setSignature(XMLSecurityDSig $signature)
     {
         $this->signature = $signature;
+        $this->wrappingCheckPassed = false;
     }
 
     /**
@@ -61,7 +65,12 @@ class SignatureXmlReader extends AbstractSignatureReader
         }
 
         // Must run before validateReference() because that call detaches sigNode from the document.
-        $this->assertNoXmlSignatureWrapping();
+        // validateMulti() calls validate() once per candidate key, so only the first call can see the
+        // document. A failed check throws before the detach, so a rejected signature fails for every key.
+        if (!$this->wrappingCheckPassed) {
+            $this->assertNoXmlSignatureWrapping();
+            $this->wrappingCheckPassed = true;
+        }
 
         try {
             $this->signature->validateReference();
