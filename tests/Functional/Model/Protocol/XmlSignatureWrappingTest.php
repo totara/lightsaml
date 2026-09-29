@@ -7,6 +7,7 @@ use DOMElement;
 use DOMXPath;
 use LightSaml\Credential\KeyHelper;
 use LightSaml\Credential\X509Certificate;
+use LightSaml\Credential\X509Credential;
 use LightSaml\Error\LightSamlSecurityException;
 use LightSaml\Helper;
 use LightSaml\Model\Assertion\Assertion;
@@ -149,20 +150,8 @@ class XmlSignatureWrappingTest extends BaseTestCase
         $serCtx = new SerializationContext();
         $response->serialize($serCtx->getDocument(), $serCtx);
 
-        $doc = new DOMDocument();
-        $doc->loadXML($serCtx->getDocument()->saveXML());
-
-        $decoy = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Assertion');
-        $decoy->setAttribute('ID', $assertionId);
-        $decoy->setAttribute('Version', '2.0');
-        $decoy->setAttribute('IssueInstant', '2024-01-01T00:00:00Z');
-        $decoyIssuer = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Issuer');
-        $decoyIssuer->textContent = 'https://idp.example.com';
-        $decoy->appendChild($decoyIssuer);
-        $doc->documentElement->appendChild($decoy);
-
         $desCtx = new DeserializationContext();
-        $desCtx->getDocument()->loadXML($doc->saveXML());
+        $desCtx->getDocument()->loadXML($this->appendDuplicateIdDecoy($serCtx->getDocument()->saveXML(), $assertionId));
         $deserialized = new Response();
         $deserialized->deserialize($desCtx->getDocument(), $desCtx);
 
@@ -182,6 +171,67 @@ class XmlSignatureWrappingTest extends BaseTestCase
         $reader->validate(KeyHelper::createPublicKey($this->getCertificate()));
     }
 
+    public function test_validate_multi_accepts_signature_from_second_key(): void
+    {
+        // An IdP mid certificate rollover lists two signing certificates. The first one tried does not
+        // match, so validate() runs again for the second after validateReference() has already
+        // detached the signature node from the document.
+        $assertionId = Helper::generateID();
+        $response = $this->buildSignedResponse($assertionId, 'alice@example.com');
+
+        $serCtx = new SerializationContext();
+        $response->serialize($serCtx->getDocument(), $serCtx);
+
+        $desCtx = new DeserializationContext();
+        $desCtx->getDocument()->loadXML($serCtx->getDocument()->saveXML());
+        $deserialized = new Response();
+        $deserialized->deserialize($desCtx->getDocument(), $desCtx);
+
+        $matching = new X509Credential($this->getCertificate());
+
+        /** @var SignatureXmlReader $sig */
+        $sig = $deserialized->getAllAssertions()[0]->getSignature();
+        $this->assertSame($matching, $sig->validateMulti([
+            new X509Credential($this->getOtherCertificate()),
+            $matching,
+        ]));
+    }
+
+    public function test_validate_multi_rejects_xsw_for_every_key(): void
+    {
+        // The signed assertion is untouched, so without the wrapping check the matching key verifies
+        // it. The matching key is tried last, so the check has to fail on that call too rather than
+        // being skipped after it failed for the first key.
+        $assertionId = Helper::generateID();
+        $response = $this->buildSignedResponse($assertionId, 'alice@example.com');
+
+        $serCtx = new SerializationContext();
+        $response->serialize($serCtx->getDocument(), $serCtx);
+
+        $desCtx = new DeserializationContext();
+        $desCtx->getDocument()->loadXML($this->appendDuplicateIdDecoy($serCtx->getDocument()->saveXML(), $assertionId));
+        $deserialized = new Response();
+        $deserialized->deserialize($desCtx->getDocument(), $desCtx);
+
+        $signed = null;
+        foreach ($deserialized->getAllAssertions() as $a) {
+            if ($a->getSignature() instanceof SignatureXmlReader) {
+                $signed = $a;
+            }
+        }
+        $this->assertNotNull($signed);
+
+        $this->expectException(LightSamlSecurityException::class);
+        $this->expectExceptionMessageMatches('/Duplicate ID .* XML Signature Wrapping/');
+
+        /** @var SignatureXmlReader $sig */
+        $sig = $signed->getSignature();
+        $sig->validateMulti([
+            new X509Credential($this->getOtherCertificate()),
+            new X509Credential($this->getCertificate()),
+        ]);
+    }
+
     private function buildSignedResponse(string $assertionId, string $nameIdValue): Response
     {
         return (new Response())
@@ -199,6 +249,27 @@ class XmlSignatureWrappingTest extends BaseTestCase
                     )
                     ->setSignature(new SignatureWriter($this->getCertificate(), $this->getPrivateKey()))
             );
+    }
+
+    /**
+     * Appends a decoy assertion carrying the same ID as the signed one, leaving the signed assertion
+     * byte-for-byte intact so its digest and signature still verify.
+     */
+    private function appendDuplicateIdDecoy(string $xml, string $assertionId): string
+    {
+        $doc = new DOMDocument();
+        $doc->loadXML($xml);
+
+        $decoy = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Assertion');
+        $decoy->setAttribute('ID', $assertionId);
+        $decoy->setAttribute('Version', '2.0');
+        $decoy->setAttribute('IssueInstant', '2024-01-01T00:00:00Z');
+        $decoyIssuer = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Issuer');
+        $decoyIssuer->textContent = 'https://idp.example.com';
+        $decoy->appendChild($decoyIssuer);
+        $doc->documentElement->appendChild($decoy);
+
+        return $doc->saveXML();
     }
 
     /**
@@ -263,6 +334,11 @@ class XmlSignatureWrappingTest extends BaseTestCase
     private function getCertificate(): X509Certificate
     {
         return X509Certificate::fromFile(__DIR__ . '/../../../resources/web_saml.crt');
+    }
+
+    private function getOtherCertificate(): X509Certificate
+    {
+        return X509Certificate::fromFile(__DIR__ . '/../../../resources/saml.crt');
     }
 
     private function getPrivateKey(): XMLSecurityKey
