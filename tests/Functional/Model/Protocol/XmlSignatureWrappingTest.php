@@ -150,20 +150,8 @@ class XmlSignatureWrappingTest extends BaseTestCase
         $serCtx = new SerializationContext();
         $response->serialize($serCtx->getDocument(), $serCtx);
 
-        $doc = new DOMDocument();
-        $doc->loadXML($serCtx->getDocument()->saveXML());
-
-        $decoy = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Assertion');
-        $decoy->setAttribute('ID', $assertionId);
-        $decoy->setAttribute('Version', '2.0');
-        $decoy->setAttribute('IssueInstant', '2024-01-01T00:00:00Z');
-        $decoyIssuer = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Issuer');
-        $decoyIssuer->textContent = 'https://idp.example.com';
-        $decoy->appendChild($decoyIssuer);
-        $doc->documentElement->appendChild($decoy);
-
         $desCtx = new DeserializationContext();
-        $desCtx->getDocument()->loadXML($doc->saveXML());
+        $desCtx->getDocument()->loadXML($this->appendDuplicateIdDecoy($serCtx->getDocument()->saveXML(), $assertionId));
         $deserialized = new Response();
         $deserialized->deserialize($desCtx->getDocument(), $desCtx);
 
@@ -211,24 +199,33 @@ class XmlSignatureWrappingTest extends BaseTestCase
 
     public function test_validate_multi_rejects_xsw_for_every_key(): void
     {
+        // The signed assertion is untouched, so without the wrapping check the matching key verifies
+        // it. The matching key is tried last, so the check has to fail on that call too rather than
+        // being skipped after it failed for the first key.
         $assertionId = Helper::generateID();
         $response = $this->buildSignedResponse($assertionId, 'alice@example.com');
 
         $serCtx = new SerializationContext();
         $response->serialize($serCtx->getDocument(), $serCtx);
-        $tamperedXml = $this->buildXswPayload($serCtx->getDocument()->saveXML(), $assertionId);
 
         $desCtx = new DeserializationContext();
-        $desCtx->getDocument()->loadXML($tamperedXml);
-        $tamperedResponse = new Response();
-        $tamperedResponse->deserialize($desCtx->getDocument(), $desCtx);
+        $desCtx->getDocument()->loadXML($this->appendDuplicateIdDecoy($serCtx->getDocument()->saveXML(), $assertionId));
+        $deserialized = new Response();
+        $deserialized->deserialize($desCtx->getDocument(), $desCtx);
 
-        // The matching key is tried last, so the wrapping check has to fail on that call too.
+        $signed = null;
+        foreach ($deserialized->getAllAssertions() as $a) {
+            if ($a->getSignature() instanceof SignatureXmlReader) {
+                $signed = $a;
+            }
+        }
+        $this->assertNotNull($signed);
+
         $this->expectException(LightSamlSecurityException::class);
         $this->expectExceptionMessageMatches('/Duplicate ID .* XML Signature Wrapping/');
 
         /** @var SignatureXmlReader $sig */
-        $sig = $tamperedResponse->getAllAssertions()[0]->getSignature();
+        $sig = $signed->getSignature();
         $sig->validateMulti([
             new X509Credential($this->getOtherCertificate()),
             new X509Credential($this->getCertificate()),
@@ -252,6 +249,27 @@ class XmlSignatureWrappingTest extends BaseTestCase
                     )
                     ->setSignature(new SignatureWriter($this->getCertificate(), $this->getPrivateKey()))
             );
+    }
+
+    /**
+     * Appends a decoy assertion carrying the same ID as the signed one, leaving the signed assertion
+     * byte-for-byte intact so its digest and signature still verify.
+     */
+    private function appendDuplicateIdDecoy(string $xml, string $assertionId): string
+    {
+        $doc = new DOMDocument();
+        $doc->loadXML($xml);
+
+        $decoy = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Assertion');
+        $decoy->setAttribute('ID', $assertionId);
+        $decoy->setAttribute('Version', '2.0');
+        $decoy->setAttribute('IssueInstant', '2024-01-01T00:00:00Z');
+        $decoyIssuer = $doc->createElementNS(SamlConstants::NS_ASSERTION, 'saml:Issuer');
+        $decoyIssuer->textContent = 'https://idp.example.com';
+        $decoy->appendChild($decoyIssuer);
+        $doc->documentElement->appendChild($decoy);
+
+        return $doc->saveXML();
     }
 
     /**
