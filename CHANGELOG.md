@@ -4,6 +4,12 @@
 All notable changes to this project will be documented in this file.
 <!--- END HEADER -->
 
+## 4.7.1.1 (2026-09-30)
+
+### Bug fixes
+
+* Totara-specific fix for multi-certificate handling for the 4.x line.s
+
 ## 4.7.1 (2026-09-10)
 
 ### Security
