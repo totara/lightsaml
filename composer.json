@@ -1,26 +1,9 @@
 {
-    "name": "litesaml/lightsaml",
+    "name": "totara/lightsaml",
     "license": "MIT",
     "type": "library",
-    "description": "SAML 2.0 PHP library",
+    "description": "Totara fork of SAML 2.0 PHP library",
     "keywords": ["SAML 2.0", "PHP", "library", "lightSAML", "Single SignOn", "Single Logout"],
-    "authors": [
-        {
-            "name": "William",
-            "email": "work@suppo.fr"
-        },
-        {
-            "name": "Milos Tomic",
-            "email": "tmilos@gmail.com",
-            "homepage": "https://github.com/tmilos/",
-            "role": "Developer"
-        }
-    ],
-    "support": {
-        "issues": "https://github.com/litesaml/lightsaml/issues",
-        "source": "https://github.com/litesaml/lightsaml",
-        "docs": "https://docs.litesaml.com"
-    },
     "autoload": {
         "psr-4": {
             "LightSaml\\": "src/"
