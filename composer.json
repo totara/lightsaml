@@ -36,5 +36,8 @@
         "test": "vendor/bin/phpunit",
         "phpcs": "vendor/bin/php-cs-fixer --config=phpcs.php check . -vvv",
         "phpstan": "vendor/bin/phpstan analyse --memory-limit 512M --ansi"
+    },
+    "replace": {
+        "litesaml/lightsaml": "self.version"
     }
 }
