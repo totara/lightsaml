@@ -38,5 +38,8 @@
         "phpcs": "vendor/bin/phpcs --standard=PSR12 --exclude=Generic.Files.LineLength ./src",
         "phpstan": "vendor/bin/phpstan analyse --memory-limit 512M --ansi",
         "tag": "vendor/bin/conventional-changelog --commit"
+    },
+    "replace": {
+        "litesaml/lightsaml": "self.version"
     }
 }
