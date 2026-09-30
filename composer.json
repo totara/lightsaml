@@ -1,5 +1,5 @@
 {
-    "name": "totara/lightsaml",
+    "name": "litesaml/lightsaml",
     "license": "MIT",
     "type": "library",
     "description": "Totara fork of SAML 2.0 PHP library",
