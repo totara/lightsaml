@@ -22,11 +22,15 @@ class SignatureXmlReader extends AbstractSignatureReader
     /** @var XMLSecurityDSig */
     protected $signature;
 
+    /**
+     * Whether the key-independent checks (XSW + reference digests) already passed for $signature.
+     *
+     * @var bool
+     */
+    private $referenceValidated = false;
+
     /** @var string[] */
     protected $certificates = [];
-
-    /** @var bool */
-    private $wrappingCheckPassed = false;
 
     /**
      * @param string $certificate
@@ -47,7 +51,7 @@ class SignatureXmlReader extends AbstractSignatureReader
     public function setSignature(XMLSecurityDSig $signature)
     {
         $this->signature = $signature;
-        $this->wrappingCheckPassed = false;
+        $this->referenceValidated = false;
     }
 
     /**
@@ -69,23 +73,25 @@ class SignatureXmlReader extends AbstractSignatureReader
             return false;
         }
 
-        // Must run before validateReference() because that call detaches sigNode from the document.
-        // validateMulti() calls validate() once per candidate key, so only the first call can see the
-        // document. A failed check throws before the detach, so a rejected signature fails for every key.
-        if (!$this->wrappingCheckPassed) {
+        // These checks do not depend on the key and validateReference() detaches sigNode from the
+        // document, so they can only run once: later calls (e.g. trying several keys) skip them.
+        if (!$this->referenceValidated) {
+            // Must run before validateReference() because that call detaches sigNode from the document.
             $this->assertNoXmlSignatureWrapping();
-            $this->wrappingCheckPassed = true;
-        }
 
-        try {
-            $this->signature->validateReference();
-        } catch (Exception $e) {
-            throw new LightSamlSecurityException('Digest validation failed', $e->getCode(), $e);
+            try {
+                $this->signature->validateReference();
+            } catch (Exception $e) {
+                throw new LightSamlSecurityException('Digest validation failed', $e->getCode(), $e);
+            }
+
+            $this->referenceValidated = true;
         }
 
         $key = $this->castKeyIfNecessary($key);
 
-        if (false == $this->signature->verify($key)) {
+        // verify() returns 1 (valid), 0 (invalid) or -1 (error): anything but 1 must be rejected.
+        if (1 !== $this->signature->verify($key)) {
             throw new LightSamlSecurityException('Unable to verify Signature');
         }
 
@@ -210,6 +216,7 @@ class SignatureXmlReader extends AbstractSignatureReader
         $this->checkXmlNodeName($node, 'Signature', SamlConstants::NS_XMLDSIG);
 
         $this->signature = new XMLSecurityDSig();
+        $this->referenceValidated = false;
         $this->signature->idKeys[] = $this->getIDName();
         $this->signature->sigNode = $node;
         $this->signature->canonicalizeSignedInfo();
